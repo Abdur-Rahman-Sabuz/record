@@ -208,7 +208,7 @@ const VF=["farmId","date","chickDate","age","company","breed","chicks","dead","f
 const FF=["name","mobile","dealer","address","dealerMobile"];
 const KINDS=["farms","visits","profile"];
 
-// 👇 আপনার গুগল অ্যাপস স্ক্রিপ্ট থেকে পাওয়া ওয়েব অ্যাপ ইউআরএল (URL) এখানে বসিয়ে দিন
+// গুগল অ্যাপস স্ক্রিপ্ট লিঙ্ক
 const GOOGLE_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbxiatE8pC4e0FrJP1KfsBMUfhfCqQsY-Sknn-A2g4jB6G5kSu2MtFfHiuSuCBj2WDKEww/exec";
 
 let sec="broiler",editV=null,editF=null,farmFilter=null;
@@ -217,21 +217,31 @@ let armed=null;const sure=k=>{if(armed===k){armed=null;return true}armed=k;toast
 let tt;const toast=t=>{const e=$("#toast");e.textContent=t;e.classList.remove("hide");clearTimeout(tt);tt=setTimeout(()=>e.classList.add("hide"),5000)};
 const note=t=>{$("#msg").textContent=t;if(/failed|problem|error/i.test(t))toast(t)};
 
-// ---------- Storage & Google Sheets Sync ----------
+// ---------- Storage ----------
 const lsGet=k=>{try{return JSON.parse(localStorage.getItem(LS[k])||"[]")}catch(e){return[]}};
 const lsPut=k=>{try{localStorage.setItem(LS[k],JSON.stringify(data[k]))}catch(e){}};
 
 async function init(){
   try {
     note("🔄 Syncing with Google Sheets...");
-    for (const k of KINDS) {
-      const res = await fetch(GOOGLE_SCRIPT_URL + "?action=read&kind=" + k);
-      const rows = await res.json();
-      if (Array.isArray(rows)) {
-        data[k] = rows;
-        lsPut(k);
-      }
+    
+    // ১. সকল খামারি এক শিট (farms) থেকেই লোড হবে
+    const resFarms = await fetch(GOOGLE_SCRIPT_URL + "?action=read&kind=farms");
+    const rowsFarms = await resFarms.json();
+    if (Array.isArray(rowsFarms)) {
+      data.farms = rowsFarms;
+      lsPut("farms");
     }
+
+    // ২. বর্তমান সেকশন (broiler বা layer) অনুযায়ী ভিজিট ডাটা লোড হবে
+    const currentSec = document.body.dataset.sec || sec;
+    const resVisits = await fetch(GOOGLE_SCRIPT_URL + "?action=read&kind=visits&sec=" + currentSec);
+    const rowsVisits = await resVisits.json();
+    if (Array.isArray(rowsVisits)) {
+      data.visits = rowsVisits;
+      lsPut("visits");
+    }
+
     renderAll();
     note("✓ Synced with Google Sheets");
   } catch (e) {
@@ -242,6 +252,8 @@ async function init(){
 }
 
 async function save(k, o){
+  const targetSec = (k === "visits") ? (document.body.dataset.sec || sec) : "broiler";
+  
   const i = data[k].findIndex(x => x.id === o.id);
   i >= 0 ? data[k][i] = o : data[k].push(o);
   lsPut(k);
@@ -252,7 +264,12 @@ async function save(k, o){
       method: "POST",
       mode: "no-cors",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ action: "save", kind: k, data: o })
+      body: JSON.stringify({ 
+        action: "save", 
+        kind: k, 
+        sec: targetSec, 
+        data: o 
+      })
     });
     toast("✓ Saved & Synced to Google Sheet");
   } catch(e) {
@@ -261,6 +278,9 @@ async function save(k, o){
 }
 
 async function del(k, id){
+  const item = data[k].find(x => x.id === id);
+  const itemSec = (k === "visits") ? (document.body.dataset.sec || sec) : "broiler";
+  
   data[k] = data[k].filter(x => x.id !== id);
   lsPut(k);
   try { renderAll(); } catch(e) {}
@@ -270,7 +290,12 @@ async function del(k, id){
       method: "POST",
       mode: "no-cors",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ action: "delete", kind: k, id: id })
+      body: JSON.stringify({ 
+        action: "delete", 
+        kind: k, 
+        sec: itemSec, 
+        id: id 
+      })
     });
     toast("✓ Deleted from Google Sheet");
   } catch(e) {
@@ -343,7 +368,6 @@ function filtered(){
   const from=$("#ffrom").value,to=$("#fto").value,q=$("#fq").value.trim().toLowerCase(),
     dl=$("#fdealer").value,fd=$("#ffeed").value,co=$("#fco").value;
   return byDate(data.visits.filter(v=>{
-    if(v.sec!==sec)return false;
     if(from&&v.date<from)return false;if(to&&v.date>to)return false;
     const f=farmOf(v.farmId)||{};
     if(farmFilter&&v.farmId!==farmFilter)return false;
@@ -361,7 +385,7 @@ function renderSum(){
   $("#fchip").classList.toggle("hide",!farmFilter);
   if(farmFilter)$("#fchip").innerHTML="Farmer: "+esc((farmOf(farmFilter)||{}).name||"")+" ✕";
   const g=$("#fgroup").value,keyOf=v=>{const f=farmOf(v.farmId)||{};
-    return g==="farm"?f.name:g==="feed"?v.feed:g==="dealer"?v.dealer:g==="company"?v.company:g==="week"?wk(v.date):v.date.slice(0,7)}, M={};
+    return g==="farm"?f.name:g==="feed"?v.feed:g==="dealer"?f.dealer:g==="company"?v.company:g==="week"?wk(v.date):v.date.slice(0,7)}, M={};
   list.forEach(v=>{const k=keyOf(v)||"(blank)";(M[k]=M[k]||[]).push(v)});
   const lay=sec==="layer";
   $("#grp").innerHTML=Object.keys(M).length?`<div class="gr h"><span>Name</span><span>Visits</span><span>Farms</span><span>${lay?"Production %":"FCR"}</span><span>${lay?"Feed/bird (g)":"Weight (kg)"}</span></div>`+
@@ -399,7 +423,7 @@ function fillOpts(id,label,vals){
   const s=$(id),c=s.value;s.innerHTML=`<option value="">All ${label}</option>`+vals.map(x=>`<option value="${esc(x)}">${esc(x)}</option>`).join("");s.value=vals.includes(c)?c:"";
 }
 function renderOpts(){
-  const sv=data.visits.filter(v=>v.sec===sec),sf=data.farms.filter(f=>f.sec===sec);
+  const sv=data.visits,sf=data.farms;
   fillOpts("#fdealer","dealers",uniq(sf.map(f=>f.dealer)));
   fillOpts("#ffeed","feeds",uniq(sv.map(v=>v.feed)));
   fillOpts("#fco","companies",uniq(sv.map(v=>v.company)));
@@ -411,7 +435,7 @@ function renderOpts(){
 
 // ---------- Farmers / Home / Profile ----------
 function renderFarms(){
-  const l=data.farms.filter(f=>f.sec===sec).sort((a,b)=>a.name.localeCompare(b.name));
+  const l=data.farms.sort((a,b)=>a.name.localeCompare(b.name));
   $("#flist").innerHTML=l.length?l.map(f=>{const n=data.visits.filter(v=>v.farmId===f.id).length;
     return `<div class="card"><h3>${esc(f.name)}</h3><div class="meta">${f.mobile?`<a href="tel:${esc(f.mobile)}">${esc(f.mobile)}</a> · `:""}${esc(f.address)}</div>
     <div class="meta">${f.dealer?"Dealer: "+esc(f.dealer)+(f.dealerMobile?" ("+esc(f.dealerMobile)+")":"")+" · ":""}${n} visit${n===1?"":"s"}</div>
@@ -432,8 +456,7 @@ function renderProfile(){
   <div class="note">${esc(p.about||"Edit your profile and write down what you do.")}</div>
   <div class="row" style="margin-top:8px"><button class="btn s p" id="pedit-b">Edit Profile</button></div>`;
   $("#pedit-b").onclick=()=>{const f=$("#pf");["name","role","org","phone","area","about"].forEach(k=>f[k].value=p[k]??"");$("#pedit").classList.remove("hide")};
-  const fb=data.farms.filter(f=>f.sec==="broiler").length,fl=data.farms.filter(f=>f.sec==="layer").length;
-  $("#pstats").innerHTML=[["Broiler/Sonali farms",fb],["Layer farms",fl],["Total visits",V.length],["Dealers",uniq(data.farms.map(f=>f.dealer)).length]].map(x=>`<div class="st"><b>${x[1]}</b><span>${x[0]}</span></div>`).join("")+
+  $("#pstats").innerHTML=[["Total farms",data.farms.length],["Total visits",V.length],["Dealers",uniq(data.farms.map(f=>f.dealer)).length]].map(x=>`<div class="st"><b>${x[1]}</b><span>${x[0]}</span></div>`).join("")+
     `<div class="st"><b style="font-size:15px">${fmt(V.length?V[V.length-1].date:"")}</b><span>First visit</span></div><div class="st"><b style="font-size:15px">${fmt(V[0]&&V[0].date)}</b><span>Last visit</span></div>`;
 }
 function renderAll(){renderHome();renderProfile();renderFarms();renderOpts();renderSum()}
@@ -461,7 +484,7 @@ function setFarmField(fid){
   const f=$("#vf"),o=farmOf(fid);f.farmId.value=o?o.id:"";f.farmName.value=o?o.name:"";$("#nf").classList.add("hide");
 }
 $("#vf").farmName.oninput=e=>{
-  const f=$("#vf"),n=e.target.value.trim().toLowerCase(),o=data.farms.find(x=>x.sec===sec&&x.name.trim().toLowerCase()===n);
+  const f=$("#vf"),n=e.target.value.trim().toLowerCase(),o=data.farms.find(x=>x.name.trim().toLowerCase()===n);
   f.farmId.value=o?o.id:"";$("#nf").classList.toggle("hide",!!o||!n);
   if(o)fillFarmInfo(o.id,!editV);else $("#finfo").textContent="";
 };
@@ -480,7 +503,7 @@ function show(v){
   ["sum","visit","farms","farm"].forEach(k=>$("#v-"+k).classList.toggle("hide",k!==v));
   $$("#nav button").forEach(b=>b.classList.toggle("on",b.dataset.v===v||v==="farm"&&b.dataset.v==="farms"));window.scrollTo(0,0);
 }
-function setSecUI(s){sec=s;document.body.dataset.sec=s;fillBreeds();$$("#secs button").forEach(b=>b.classList.toggle("on",b.dataset.s===s))}
+function setSecUI(s){sec=s;document.body.dataset.sec=s;fillBreeds();$$("#secs button").forEach(b=>b.classList.toggle("on",b.dataset.s===s));init();}
 function openVisit(fid){
   editV=null;const f=$("#vf");f.reset();f.breedOther.classList.add("hide");$("#vt").textContent="New Visit";setFarmField(fid||"");f.date.value=iso(new Date());
   if(fid)fillFarmInfo(fid,true);else{$("#finfo").textContent="";preview()}
@@ -498,7 +521,7 @@ document.body.onclick=async e=>{
   const d=t.dataset||{};
   try{
   if(d.p)setPage(d.p);
-  if(d.s){setSecUI(d.s);farmFilter=null;renderAll();show("sum")}
+  if(d.s){setSecUI(d.s);farmFilter=null;}
   if(d.v)d.v==="visit"?openVisit():show(d.v);
   if(d.r)quick(d.r);
   if(d.m){viewMode=d.m;$$("#vm button").forEach(b=>b.classList.toggle("on",b.dataset.m===d.m));renderSum()}
@@ -507,7 +530,7 @@ document.body.onclick=async e=>{
   if(d.nv)openVisit(d.nv);
   if(d.h){farmFilter=d.h;$("#ffrom").value="";$("#fto").value="";["fq","fdealer","ffeed","fco"].forEach(i=>$("#"+i).value="");renderSum();setPage("diary");show("sum")}
   if(d.ef)openFarm(d.ef);
-  if(d.ev){const v=data.visits.find(x=>x.id===d.ev);if(!v)return;setSecUI(v.sec);renderOpts();
+  if(d.ev){const v=data.visits.find(x=>x.id===d.ev);if(!v)return;renderOpts();
     const f=$("#vf");ensureBreed(v.breed);VF.forEach(k=>f[k].value=v[k]??"");if(v.wu!=="kg"&&num(v.avgW)!=null)f.avgW.value=+(v.avgW/1000).toFixed(3);f.breedOther.value="";f.breedOther.classList.add("hide");setFarmField(v.farmId);editV=v.id;$("#vt").textContent="Edit Visit";fillFarmInfo(v.farmId,false);show("visit")}
   if(d.dv&&sure(d.dv))await del("visits",d.dv);
   if(d.df&&sure(d.df)){for(const v of data.visits.filter(x=>x.farmId===d.df))await del("visits",v.id);await del("farms",d.df)}
@@ -518,15 +541,15 @@ $("#fchip").onclick=()=>{farmFilter=null;renderSum()};
 $("#freset").onclick=()=>{farmFilter=null;["ffrom","fto","fq","fdealer","ffeed","fco"].forEach(i=>$("#"+i).value="");renderSum()};
 $("#addfarm").onclick=()=>openFarm();
 $("#vf").onsubmit=async e=>{
-  e.preventDefault();const f=e.target,v={id:editV||uid_(),sec};
+  e.preventDefault();const f=e.target,v={id:editV||uid_()};
   VF.forEach(k=>v[k]=f[k].value.trim());v.wu="kg";if(v.breed==="Other")v.breed=f.breedOther.value.trim();
   try{
-    if(!v.farmId){const o={id:uid_(),sec,name:f.farmName.value.trim(),mobile:f.nfMobile.value.trim(),address:f.nfAddress.value.trim(),dealer:f.nfDealer.value.trim(),dealerMobile:f.nfDealerMobile.value.trim()};await save("farms",o);v.farmId=o.id}
+    if(!v.farmId){const o={id:uid_(),name:f.farmName.value.trim(),mobile:f.nfMobile.value.trim(),address:f.nfAddress.value.trim(),dealer:f.nfDealer.value.trim(),dealerMobile:f.nfDealerMobile.value.trim()};await save("farms",o);v.farmId=o.id}
     await save("visits",v);editV=null;toast("✓ Visit saved");show("sum");
   }catch(err){note("Save failed: "+(err&&err.message||err))}
 };
 $("#ff").onsubmit=async e=>{
-  e.preventDefault();const f=e.target,o={id:editF||uid_(),sec:editF?farmOf(editF).sec:sec};
+  e.preventDefault();const f=e.target,o={id:editF||uid_()};
   FF.forEach(k=>o[k]=f[k].value.trim());
   try{await save("farms",o);editF=null;toast("✓ Farmer saved");show("farms")}catch(err){note("Save failed: "+(err&&err.message||err))}
 };
@@ -567,7 +590,7 @@ $("#impf").onchange=async e=>{
   catch(err){note("Could not read the file — error")}
   e.target.value="";
 };
-fillBreeds();KINDS.forEach(k=>data[k]=lsGet(k));quick("week");renderAll();preview();init();
+fillBreeds();quick("week");preview();init();
 })();
 </script>
 </body>
