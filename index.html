@@ -207,39 +207,75 @@ const uid_=()=>"i"+Date.now().toString(36)+Math.random().toString(36).slice(2,6)
 const VF=["farmId","date","chickDate","age","company","breed","chicks","dead","feed","avgW","totalW","feedEaten","fcr","eggs","eggW","dailyFeed","shedL","shedW","lightType","bulbW","problem","diagnosis","medicines","notes"];
 const FF=["name","mobile","dealer","address","dealerMobile"];
 const KINDS=["farms","visits","profile"];
+
+// 👇 আপনার গুগল অ্যাপস স্ক্রিপ্ট থেকে পাওয়া ওয়েব অ্যাপ ইউআরএল (URL) এখানে বসিয়ে দিন
+const GOOGLE_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbyB-d-3CoBBRgILJORMeEDSjee8NPoT1Sp3V-ezkLDjAhJQpVV8Iqb0cmhvRyL4nE0EBw/exec";
+
 let sec="broiler",editV=null,editF=null,farmFilter=null;
 const data={farms:[],visits:[],profile:[]},cols={},LS={farms:"hub.farms",visits:"hub.visits",profile:"hub.profile"};
 let armed=null;const sure=k=>{if(armed===k){armed=null;return true}armed=k;toast("Tap Delete again to confirm");setTimeout(()=>{if(armed===k)armed=null},4000);return false};
 let tt;const toast=t=>{const e=$("#toast");e.textContent=t;e.classList.remove("hide");clearTimeout(tt);tt=setTimeout(()=>e.classList.add("hide"),5000)};
 const note=t=>{$("#msg").textContent=t;if(/failed|problem|error/i.test(t))toast(t)};
 
-// ---------- Storage ----------
+// ---------- Storage & Google Sheets Sync ----------
 const lsGet=k=>{try{return JSON.parse(localStorage.getItem(LS[k])||"[]")}catch(e){return[]}};
 const lsPut=k=>{try{localStorage.setItem(LS[k],JSON.stringify(data[k]))}catch(e){}};
-const synced={};
-function pushDb(k,o){if(!cols[k])return;try{const d={...o};delete d.id;cols[k].doc(o.id).set(d).catch(e=>toast("⚠ Cloud save failed ("+(e&&e.message||e)+") — saved on this device"))}catch(e){toast("⚠ Cloud save failed — saved on this device")}}
+
 async function init(){
-  let ok=false;
-  try{
-    const db=await claude.use("db"),u=await claude.use("user"),id=u&&await u.id();
-    if(db&&id){
-      KINDS.forEach(k=>{cols[k]=db.collection("data/users/"+id+"/"+k+"/rows");
-        cols[k].onSnapshot(s=>{const rem=s.docs.map(d=>({id:d.id,...d.data()})),ids=new Set(rem.map(x=>x.id)),loc=data[k].filter(x=>!ids.has(x.id));data[k]=rem.concat(loc);lsPut(k);if(!synced[k]){synced[k]=1;loc.forEach(o=>pushDb(k,o))}renderAll()},e=>note("Database problem: "+(e&&e.message||e)))});
-      ok=true;
+  try {
+    note("🔄 Syncing with Google Sheets...");
+    for (const k of KINDS) {
+      const res = await fetch(GOOGLE_SCRIPT_URL + "?action=read&kind=" + k);
+      const rows = await res.json();
+      if (Array.isArray(rows)) {
+        data[k] = rows;
+        lsPut(k);
+      }
     }
-  }catch(e){ok=false}
-  if(!ok){renderAll();
-    note("📱 Saving in this device's browser. Clearing browser data may delete it — take regular backups from the Profile page.")}
+    renderAll();
+    note("✓ Synced with Google Sheets");
+  } catch (e) {
+    KINDS.forEach(k=>data[k]=lsGet(k));
+    renderAll();
+    note("📱 Working offline using local browser data");
+  }
 }
-async function save(k,o){
-  const i=data[k].findIndex(x=>x.id===o.id);i>=0?data[k][i]=o:data[k].push(o);lsPut(k);
-  try{renderAll()}catch(e){console.error(e)}
-  pushDb(k,o);
+
+async function save(k, o){
+  const i = data[k].findIndex(x => x.id === o.id);
+  i >= 0 ? data[k][i] = o : data[k].push(o);
+  lsPut(k);
+  try { renderAll(); } catch(e) {}
+
+  try {
+    await fetch(GOOGLE_SCRIPT_URL, {
+      method: "POST",
+      mode: "no-cors",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "save", kind: k, data: o })
+    });
+    toast("✓ Saved & Synced to Google Sheet");
+  } catch(e) {
+    toast("⚠ Saved locally — Google Sheet sync failed");
+  }
 }
-async function del(k,id){
-  data[k]=data[k].filter(x=>x.id!==id);lsPut(k);
-  try{renderAll()}catch(e){console.error(e)}
-  if(cols[k]){try{cols[k].doc(id).delete().catch(()=>toast("⚠ Could not delete from cloud"))}catch(e){}}
+
+async function del(k, id){
+  data[k] = data[k].filter(x => x.id !== id);
+  lsPut(k);
+  try { renderAll(); } catch(e) {}
+
+  try {
+    await fetch(GOOGLE_SCRIPT_URL, {
+      method: "POST",
+      mode: "no-cors",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "delete", kind: k, id: id })
+    });
+    toast("✓ Deleted from Google Sheet");
+  } catch(e) {
+    toast("⚠ Deleted locally");
+  }
 }
 
 // ---------- Calculations ----------
@@ -325,7 +361,7 @@ function renderSum(){
   $("#fchip").classList.toggle("hide",!farmFilter);
   if(farmFilter)$("#fchip").innerHTML="Farmer: "+esc((farmOf(farmFilter)||{}).name||"")+" ✕";
   const g=$("#fgroup").value,keyOf=v=>{const f=farmOf(v.farmId)||{};
-    return g==="farm"?f.name:g==="feed"?v.feed:g==="dealer"?f.dealer:g==="company"?v.company:g==="week"?wk(v.date):v.date.slice(0,7)}, M={};
+    return g==="farm"?f.name:g==="feed"?v.feed:g==="dealer"?v.dealer:g==="company"?v.company:g==="week"?wk(v.date):v.date.slice(0,7)}, M={};
   list.forEach(v=>{const k=keyOf(v)||"(blank)";(M[k]=M[k]||[]).push(v)});
   const lay=sec==="layer";
   $("#grp").innerHTML=Object.keys(M).length?`<div class="gr h"><span>Name</span><span>Visits</span><span>Farms</span><span>${lay?"Production %":"FCR"}</span><span>${lay?"Feed/bird (g)":"Weight (kg)"}</span></div>`+
